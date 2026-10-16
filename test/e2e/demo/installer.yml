@@ -1,0 +1,32 @@
+# The library CI installs into test/e2e/app with the wheel it just built, then
+# builds and runs. Every part of installer.yml esp32-installer acts on is used.
+
+name: demo
+description: A library for the end to end test
+repository: https://github.com/nimaltd/esp32-installer
+license: Apache-2.0
+
+requires:
+  esp32_installer: 1.0.0
+  kconfig:
+    - FREERTOS_HZ=1000
+
+install:
+  layout: mirror
+  defines:
+    - DEMO_FAST
+
+files:
+  headers:
+    - src/demo.h
+  sources:
+    - src/demo.c
+
+esp32:
+  requires: [esp_timer]
+  settings:
+    - name: DEMO_BASE
+      type: int
+      default: 40
+      range: [0, 100]
+      prompt: What demo_answer() adds two to
