@@ -10,9 +10,10 @@ can see and undo:
                          which ESP-IDF finds by itself
     sdkconfig.defaults   a block with the Kconfig symbols the library needs,
                          only when it needs any
-    main/CMakeLists.txt  the library's name in main's REQUIRES, only when main
-                         lists its own. Without a list of its own, main uses
-                         every component of the build, this one too
+    main/CMakeLists.txt  the library's name in main's REQUIRES, when main
+                         lists its own, or when the project builds only what
+                         main needs. Otherwise main uses every component of
+                         the build by itself, this one too
 
 All of them are the user's, so the rules of every edit here hold: a copy is
 taken before anything changes, a file this cannot read safely is left alone
@@ -50,6 +51,15 @@ PROJECT_CMAKE = re.compile(r"^[ \t]*include[ \t]*\([^)\n]*tools/cmake/project\.c
 
 # A project that names its own defaults files, in place of sdkconfig.defaults.
 NAMES_DEFAULTS = re.compile(r"^[ \t]*set[ \t]*\([ \t]*SDKCONFIG_DEFAULTS\b", re.MULTILINE | re.IGNORECASE)
+
+# A project that builds only the components main needs: MINIMAL_BUILD, which
+# ESP-IDF's own examples set, or a COMPONENTS list. A component nothing names
+# is then left out of the build, however it got into the project.
+MINIMAL = re.compile(
+    r"^[ \t]*(?:idf_build_set_property[ \t]*\([ \t]*MINIMAL_BUILD[ \t]+(?:ON|TRUE|YES|1)\b"
+    r"|set[ \t]*\([ \t]*COMPONENTS\b)",
+    re.MULTILINE | re.IGNORECASE,
+)
 
 # CONFIG_FOO=y, and the form menuconfig writes for a symbol switched off. A
 # file written on Windows ends its lines in CRLF, and $ stops only before the
@@ -93,6 +103,11 @@ def find_project(project_root):
 def names_its_defaults(project_root):
     """Whether the project's CMakeLists.txt sets SDKCONFIG_DEFAULTS itself."""
     return bool(NAMES_DEFAULTS.search(_text(Path(project_root) / CMAKELISTS)))
+
+
+def builds_minimal(project_root):
+    """Whether the project builds only what main needs, so main has to name every component it uses."""
+    return bool(MINIMAL.search(_text(Path(project_root) / CMAKELISTS)))
 
 
 def in_components(destination, project_root):
@@ -473,8 +488,10 @@ def _words(text, start):
 
 def _lists(text):
     """
-    main's REQUIRES and PRIV_REQUIRES, as {keyword: (keyword's end, [(word, first, last)])},
-    or None when main/CMakeLists.txt has no idf_component_register() it can read.
+    main's REQUIRES and PRIV_REQUIRES, as {keyword: (first, last, [(word, first, last)])}
+    with where the keyword itself is, and where its last argument ends, the
+    place for a list main does not have yet. None when main/CMakeLists.txt
+    has no idf_component_register() it can read.
     """
     found = _REGISTER.search(text)
 
@@ -494,23 +511,24 @@ def _lists(text):
             current = word if word in ("REQUIRES", "PRIV_REQUIRES") else None
 
             if current is not None and current not in lists:
-                lists[current] = (last, [])
+                lists[current] = (first, last, [])
 
             continue
 
         if current is not None:
-            lists[current][1].append((word, first, last))
+            lists[current][2].append((word, first, last))
 
-    return lists
+    return lists, (words[-1][2] if words else found.end())
 
 
 def integrate_main(project_root, name):
     """
-    Add the component to main's REQUIRES, when main lists its own. Returns an
-    Outcome, or None when main needs nothing: without a list of its own, main
-    uses every component of the build by itself.
+    Add the component to main's REQUIRES, when main lists its own, or when the
+    project builds only what main needs. Returns an Outcome, or None when main
+    needs nothing: otherwise main uses every component of the build by itself.
     """
     path = Path(project_root) / MAIN
+    minimal = builds_minimal(project_root)
 
     if not path.is_file():
         return None
@@ -521,26 +539,37 @@ def integrate_main(project_root, name):
         return Outcome(MAIN, MANUAL, f"Could not read {MAIN}: {error}",
                        [f"Add {name} to PRIV_REQUIRES of idf_component_register() in {MAIN}."])
 
-    lists = _lists(text)
+    found = _lists(text)
 
-    if lists is None:
+    if found is None:
         return Outcome(MAIN, MANUAL, f"{MAIN} has no idf_component_register() this could read.",
                        [f"If main lists REQUIRES or PRIV_REQUIRES, add {name} to them."])
 
-    if not lists:
+    lists, last = found
+
+    if not lists and not minimal:
         return None
 
-    if any(word.strip('"') == name for _end, items in lists.values() for word, _first, _last in items):
+    if any(word.strip('"') == name for _first, _end, items in lists.values() for word, _w1, _w2 in items):
         return Outcome(MAIN, ALREADY, f"{MAIN} already requires {name}.")
 
-    # Main's own use, so PRIV_REQUIRES when it has one, as ESP-IDF suggests
-    # for a component nothing else builds on.
-    keyword = "PRIV_REQUIRES" if "PRIV_REQUIRES" in lists else "REQUIRES"
-    end = lists[keyword][0]
-    outcome = _write_block(path, MAIN, text, text[:end] + " " + name + text[end:], name)
+    if lists:
+        # Main's own use, so PRIV_REQUIRES when it has one, as ESP-IDF
+        # suggests for a component nothing else builds on.
+        keyword = "PRIV_REQUIRES" if "PRIV_REQUIRES" in lists else "REQUIRES"
+        end = lists[keyword][1]
+        updated = text[:end] + " " + name + text[end:]
+        why = f"Added {name} to {keyword} in {MAIN}, since main lists the components it uses."
+    else:
+        # A list of main's own, after its last argument, on the same line.
+        updated = text[:last] + " PRIV_REQUIRES " + name + text[last:]
+        why = (f"Added PRIV_REQUIRES {name} to {MAIN}, since this project builds only the components "
+               "main names.")
+
+    outcome = _write_block(path, MAIN, text, updated, name)
 
     if outcome.status == CHANGED:
-        outcome.message = f"Added {name} to {keyword} in {MAIN}, since main lists the components it uses."
+        outcome.message = why
 
     return outcome
 
@@ -562,7 +591,11 @@ def _without(text, first, last):
 
 
 def unrequire_main(project_root, name):
-    """Take the component out of main's REQUIRES and PRIV_REQUIRES. An Outcome, or None."""
+    """
+    Take the component out of main's REQUIRES and PRIV_REQUIRES. A keyword it
+    leaves with nothing after it goes too, so a list this added is taken out
+    whole. An Outcome, or None.
+    """
     path = Path(project_root) / MAIN
 
     try:
@@ -570,16 +603,22 @@ def unrequire_main(project_root, name):
     except (OSError, UnicodeDecodeError):
         return None
 
-    lists = _lists(text) or {}
-    found = sorted(((first, last) for _end, items in lists.values()
-                    for word, first, last in items if word.strip('"') == name), reverse=True)
+    lists = (_lists(text) or ({}, 0))[0]
+    found = []
+
+    for first, last, items in lists.values():
+        mine = [(w1, w2) for word, w1, w2 in items if word.strip('"') == name]
+        found += mine
+
+        if mine and len(mine) == len(items):
+            found.append((first, last))
 
     if not found:
         return None
 
     updated = text
 
-    for first, last in found:
+    for first, last in sorted(found, reverse=True):
         updated = _without(updated, first, last)
 
     saved = backup(path)

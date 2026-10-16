@@ -45,7 +45,8 @@ app/
   CMakeLists.txt           not touched, for a library in components/
   sdkconfig.defaults       one block added, with the symbols the library needs
   main/
-    CMakeLists.txt         example added to PRIV_REQUIRES, only when main lists its own
+    CMakeLists.txt         example added to PRIV_REQUIRES, when main lists its own
+                           or the project builds only what main names
   components/example/
     example.h              the library's files, as its installer.yml lists them
     example.c
@@ -85,7 +86,16 @@ idf_component_register(SRCS "main.c"
                        PRIV_REQUIRES example esp_timer)
 ```
 
-Into `PRIV_REQUIRES` when main has one, otherwise `REQUIRES`. A component of your own that uses the library lists it the same way, by its folder's name.
+Into `PRIV_REQUIRES` when main has one, otherwise `REQUIRES`.
+
+A project that builds only what `main` names leaves out every other component, so there `main` gets a list even when it had none. ESP-IDF's own examples are built that way, `hello_world` and `blink` among them, with `idf_build_set_property(MINIMAL_BUILD ON)` in the project's `CMakeLists.txt`, and `set(COMPONENTS ...)` does the same:
+
+```cmake
+idf_component_register(SRCS "main.c"
+                    INCLUDE_DIRS "." PRIV_REQUIRES example)
+```
+
+Without it, `#include "example.h"` in main would not be found. A component of your own that uses the library lists it the same way, by its folder's name.
 
 ### sdkconfig.defaults
 
@@ -219,7 +229,7 @@ The record of what is installed, and where, is `.esp32-installer.json` in your p
 esp32-installer --uninstall example
 ```
 
-From your project's folder, or with `--project`. Its block goes from `sdkconfig.defaults` and from `CMakeLists.txt` when it has one, its name goes from main's `REQUIRES` and `PRIV_REQUIRES`, the files the installer wrote go from its component, and then the library's own files. Installed and then uninstalled, your project's files are back to the byte they were.
+From your project's folder, or with `--project`. Its block goes from `sdkconfig.defaults` and from `CMakeLists.txt` when it has one, its name goes from main's `REQUIRES` and `PRIV_REQUIRES`, and a list left with nothing in it goes too, the files the installer wrote go from its component, and then the library's own files. Installed and then uninstalled, your project's files are back to the byte they were.
 
 What was yours is saved before it goes, as a `.bak` beside it: any file of the library you wrote in between its `USER CODE` lines or changed by hand. A file you put in the library's folder yourself is left where it is, and the folder with it.
 

@@ -224,7 +224,7 @@ def test_the_component_comes_out_of_main_again(project):
 
     assert outcome.status == CHANGED
     assert read(root / "main" / "CMakeLists.txt") == (
-        'idf_component_register(SRCS "main.c"\n    PRIV_REQUIRES\n        esp_timer\n    REQUIRES)\n'
+        'idf_component_register(SRCS "main.c"\n    PRIV_REQUIRES\n        esp_timer\n)\n'
     )
     assert prj.unrequire_main(root, "demo") is None
 
@@ -237,3 +237,57 @@ def test_a_parenthesis_inside_an_argument_does_not_close_the_call(project):
 
     assert outcome.status == CHANGED
     assert "PRIV_REQUIRES demo esp_timer)" in read(root / "main" / "CMakeLists.txt")
+
+
+MINIMAL = ('cmake_minimum_required(VERSION 3.22)\ninclude($ENV{IDF_PATH}/tools/cmake/project.cmake)\n'
+           'idf_build_set_property(MINIMAL_BUILD ON)\nproject(app)\n')
+PLAIN_MAIN = 'idf_component_register(SRCS "main.c"\n                    INCLUDE_DIRS ".")\n'
+
+
+@pytest.mark.parametrize("cmakelists", [
+    MINIMAL,
+    'include($ENV{IDF_PATH}/tools/cmake/project.cmake)\nset(COMPONENTS main)\nproject(app)\n',
+])
+def test_a_minimal_build_gives_main_a_list_of_its_own(project, cmakelists):
+    root = project(cmakelists=cmakelists, main=PLAIN_MAIN)
+
+    outcome = prj.integrate_main(root, "demo")
+
+    assert outcome.status == CHANGED
+    assert "builds only the components main names" in outcome.message
+    assert read(root / "main" / "CMakeLists.txt") == (
+        'idf_component_register(SRCS "main.c"\n                    INCLUDE_DIRS "." PRIV_REQUIRES demo)\n'
+    )
+    assert prj.integrate_main(root, "demo").status == ALREADY
+
+
+def test_a_list_added_for_a_minimal_build_comes_out_whole(project):
+    root = project(cmakelists=MINIMAL, main=PLAIN_MAIN)
+    prj.integrate_main(root, "demo")
+
+    prj.unrequire_main(root, "demo")
+
+    assert read(root / "main" / "CMakeLists.txt") == PLAIN_MAIN
+
+
+def test_minimal_build_off_is_not_minimal(project):
+    root = project(cmakelists='include($ENV{IDF_PATH}/tools/cmake/project.cmake)\n'
+                              'idf_build_set_property(MINIMAL_BUILD OFF)\n# set(COMPONENTS main)\nproject(app)\n')
+
+    assert prj.integrate_main(root, "demo") is None
+
+
+def test_a_main_with_no_arguments_gets_its_list_inside_the_call(project):
+    root = project(cmakelists=MINIMAL, main="idf_component_register()\n")
+
+    prj.integrate_main(root, "demo")
+
+    assert read(root / "main" / "CMakeLists.txt") == "idf_component_register( PRIV_REQUIRES demo)\n"
+
+
+def test_an_empty_list_of_the_users_own_is_left_alone(project):
+    main = 'idf_component_register(SRCS "main.c" PRIV_REQUIRES REQUIRES driver)\n'
+    root = project(main=main)
+
+    assert prj.unrequire_main(root, "demo") is None
+    assert read(root / "main" / "CMakeLists.txt") == main

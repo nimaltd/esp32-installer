@@ -22,11 +22,20 @@ def _uninstall(*args):
 FILES = ("CMakeLists.txt", "sdkconfig.defaults", "main/CMakeLists.txt")
 
 
+MINIMAL = ('cmake_minimum_required(VERSION 3.22)\ninclude($ENV{IDF_PATH}/tools/cmake/project.cmake)\n'
+           'idf_build_set_property(MINIMAL_BUILD ON)\nproject(app)\n')
+CMAKELISTS = 'cmake_minimum_required(VERSION 3.16)\n\ninclude($ENV{IDF_PATH}/tools/cmake/project.cmake)\nproject(app)\n'
+
+
 @pytest.mark.parametrize("crlf", [False, True])
 @pytest.mark.parametrize("folder", ["components/demo", "libs/demo"])
-def test_the_project_is_back_as_it_was(library, project, nobody, no_network, crlf, folder, capsys):
-    root = project(defaults="CONFIG_A=y\n", main='idf_component_register(SRCS "main.c" PRIV_REQUIRES esp_timer)\n',
-                   crlf=crlf)
+@pytest.mark.parametrize("cmakelists, main", [
+    (CMAKELISTS, 'idf_component_register(SRCS "main.c" PRIV_REQUIRES esp_timer)\n'),
+    (MINIMAL, 'idf_component_register(SRCS "main.c"\n                    INCLUDE_DIRS ".")\n'),
+])
+def test_the_project_is_back_as_it_was(library, project, nobody, no_network, crlf, folder, cmakelists, main,
+                                       capsys):
+    root = project(defaults="CONFIG_A=y\n", cmakelists=cmakelists, main=main, crlf=crlf)
     before = {name: read(root / name) for name in FILES}
     lib = library(requires={"kconfig": ["FREERTOS_HZ=1000"]}, esp32={"settings": [
         {"name": "DEMO_SIZE", "type": "int", "default": 8, "prompt": "Size"}]})
