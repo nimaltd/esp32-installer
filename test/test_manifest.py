@@ -93,7 +93,9 @@ def test_a_setting_named_twice_is_refused(library):
 def test_cmake_lines_are_kept_one_per_line(library):
     loaded = _load(library, esp32={"cmake": ["  target_compile_options(${COMPONENT_LIB} PRIVATE -O2)  ", ""]})
 
-    assert loaded.esp32.cmake == ["target_compile_options(${COMPONENT_LIB} PRIVATE -O2)"]
+    # The form from before 2.0.0: one group, in the component, written as it always was.
+    assert [(g.label, g.where, g.lines, g.legacy) for g in loaded.esp32.cmake] == [
+        ("cmake", "component", ["target_compile_options(${COMPONENT_LIB} PRIVATE -O2)"], True)]
 
 
 def test_a_cmake_line_that_runs_onto_another_is_refused(library):

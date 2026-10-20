@@ -1,0 +1,52 @@
+# A second library made only for the tests, with what 2.0.0 brings: files of
+# the project's own made once, and groups of CMake lines in three places. The
+# application's main.c checks each reached the build.
+
+name: extra
+description: What esp32-installer 2.0.0 brings, in a real ESP-IDF build
+repository: https://github.com/nimaltd/esp32-installer
+license: Apache-2.0
+
+requires:
+  esp32_installer: 2.0.0
+
+install:
+  layout: mirror
+
+files:
+  headers:
+    - src/extra.h
+  sources:
+    - src/extra.c
+
+once:
+  - from: project/version.txt      # ESP-IDF reads it from the project's folder
+  - from: project/extra.defaults   # added to the build by the defaults group below
+
+esp32:
+  settings:
+    - name: EXTRA_BASE
+      type: int
+      default: 1
+      range: [0, 100]
+      prompt: What extra_answer() adds two to, 5 from extra.defaults
+  cmake:
+    - label: own
+      lines:
+        - target_compile_definitions(${COMPONENT_LIB} PRIVATE EXTRA_OWN)
+    # ESP-IDF reads sdkconfig.defaults only when SDKCONFIG_DEFAULTS is not
+    # set, so it is named first, then extra.defaults after it.
+    - label: defaults
+      where: before-project
+      lines:
+        - if(NOT SDKCONFIG_DEFAULTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/sdkconfig.defaults")
+        - '    set(SDKCONFIG_DEFAULTS "${CMAKE_CURRENT_SOURCE_DIR}/sdkconfig.defaults")'
+        - endif()
+        - list(APPEND SDKCONFIG_DEFAULTS "${CMAKE_CURRENT_SOURCE_DIR}/extra.defaults")
+    # After project(), where every component's library exists.
+    - label: after
+      where: after-project
+      lines:
+        - idf_build_get_property(extra_version PROJECT_VER)
+        - idf_component_get_property(extra_main main COMPONENT_LIB)
+        - target_compile_definitions(${extra_main} PRIVATE EXTRA_AFTER EXTRA_VERSION="${extra_version}")

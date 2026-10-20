@@ -1,6 +1,7 @@
 """Shared fixtures: a throwaway library repository and a throwaway ESP-IDF project."""
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -30,6 +31,10 @@ project(app)
 MAIN_CMAKELISTS = """idf_component_register(SRCS "main.c"
                     INCLUDE_DIRS ".")
 """
+
+
+# No test asks PyPI whether a newer installer is out.
+os.environ["INSTALLER_NO_UPDATE_CHECK"] = "1"
 
 
 @pytest.fixture(autouse=True)

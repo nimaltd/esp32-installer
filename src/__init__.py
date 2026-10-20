@@ -12,7 +12,7 @@ github.com/nimaltd/core-installer. What an ESP-IDF project is, is in esp32.py.
 See https://github.com/nimaltd/esp32-installer
 """
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 
 # Before anything of the core is used: it asks the target for every answer
 # that depends on the kind of project.

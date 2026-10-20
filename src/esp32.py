@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 
 from . import component, project
-from .core import installer
+from .core import blocks, installer
 from .core.manifest import ManifestError
 from .core.target import CHANGED, INFO, MANUAL, OK, WARN, Finding, Outcome, Target
 
@@ -24,6 +24,16 @@ SYMBOL = re.compile(r"^[A-Z0-9_]+$")
 # number, a hex number, or a string in quotes. Written into the file as it
 # stands, so nothing else gets through.
 VALUE = re.compile(r'^(?:y|n|-?[0-9]+|0x[0-9A-Fa-f]+|"[^"\\\n]*")$')
+
+# Where a group of CMake lines goes: the component's own CMakeLists.txt,
+# after idf_component_register(), where ${COMPONENT_LIB} is its library; the
+# project's, above include(project.cmake), for what ESP-IDF reads as the
+# project starts, such as EXTRA_COMPONENT_DIRS; or the project's, at its end,
+# for what needs the project's own targets.
+COMPONENT_PLACE = "component"
+BEFORE_PROJECT = "before-project"
+AFTER_PROJECT = "after-project"
+PLACES = (COMPONENT_PLACE, BEFORE_PROJECT, AFTER_PROJECT)
 
 # An ESP-IDF component's name, as it lands unquoted in REQUIRES: esp_timer,
 # esp_driver_i2c, esp-tls.
@@ -234,18 +244,13 @@ class Esp32Part:
         if twice:
             raise ManifestError(f"esp32.settings has {', '.join(twice)} more than once.")
 
-        # Lines of CMake the library needs beyond its files, written as they
-        # stand into its component's CMakeLists.txt, after
-        # idf_component_register(), where ${COMPONENT_LIB} is its library.
-        cmake = data.get("cmake") or []
-
-        if not isinstance(cmake, list) or not all(isinstance(line, str) for line in cmake):
-            raise ManifestError("esp32.cmake is a list of lines of CMake, each in quotes when it holds a colon.")
-
-        if any("\n" in line or "\r" in line for line in cmake):
-            raise ManifestError("esp32.cmake has a line that runs onto another. Give each line on its own.")
-
-        self.cmake = [line.strip() for line in cmake if line.strip()]
+        # Lines of CMake the library needs beyond its files, in labelled groups,
+        # each written where its where says: into the component's
+        # CMakeLists.txt, after idf_component_register(), or the project's,
+        # above include(project.cmake) or at its end. A plain list of lines is
+        # the form from before 2.0.0: one group, in the component, written as
+        # it always was.
+        self.cmake = blocks.groups(data.get("cmake"), "esp32.cmake", PLACES, COMPONENT_PLACE)
 
 
 def idf_components(name):
@@ -282,8 +287,37 @@ class Esp32(Target):
         """Libraries go into the project's components folder, where ESP-IDF finds them."""
         return f"{project.COMPONENTS}/{library.name}"
 
+    def managed_files(self, project_root, library):
+        """
+        The project's files this edits or reads as the project's own, which a
+        once file must never be.
+        """
+        return [self.record_name, project.CMAKELISTS, project.MAIN, project.SDKCONFIG, project.DEFAULTS]
+
     def read_manifest(self, manifest, data):
         manifest.esp32 = Esp32Part(data.get("esp32"))
+
+        # A label names one group, among the library's and all its options'.
+        labels = [group.label for group in manifest.esp32.cmake]
+
+        for option in manifest.options.values():
+            labels += [group.label for group in getattr(option, "esp32_cmake", [])]
+
+        twice = sorted({label for label in labels if labels.count(label) > 1})
+
+        if twice:
+            raise ManifestError(f"esp32.cmake has two groups labelled {', '.join(twice)}, its "
+                                "options' groups counted. Give each its own label.")
+
+    def read_option(self, option, data):
+        """An option's own groups of CMake lines, written while it is taken."""
+        part = data.get("esp32") if isinstance(data, dict) else None
+
+        if part is not None and not isinstance(part, dict):
+            raise ManifestError(f"options.{option.name}.esp32 should hold cmake.")
+
+        option.esp32_cmake = blocks.groups((part or {}).get("cmake"), f"options.{option.name}.esp32.cmake",
+                                           PLACES, COMPONENT_PLACE, legacy=False)
 
     def read_requirements(self, requirements, data):
         """The ESP-IDF part of requires: Kconfig symbols, and hardware."""

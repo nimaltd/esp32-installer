@@ -31,8 +31,10 @@ import os
 import re
 from pathlib import Path
 
-from .component import cmake_quote, component_name
+from .component import cmake_quote, component_name, groups
+from .core import blocks
 from .core.files import backup
+from .core.installer import installed_libraries
 from .core.target import ALREADY, CHANGED, MANUAL, Outcome
 
 CMAKELISTS = "CMakeLists.txt"
@@ -41,8 +43,20 @@ SDKCONFIG = "sdkconfig"
 MAIN = "main/CMakeLists.txt"
 COMPONENTS = "components"
 
+INSTALLER = "esp32-installer"
+
 MARK_OPEN = "# >>> esp32-installer: {name} >>>"
 MARK_CLOSE = "# <<< esp32-installer: {name} <<<"
+
+# Where a group goes in the project's CMakeLists.txt: the same names as
+# esp32.py's, here to keep the two modules apart.
+BEFORE_PROJECT = "before-project"
+AFTER_PROJECT = "after-project"
+
+
+def marker(name, label=None):
+    """The two lines around a block of this library, or of one of its groups."""
+    return blocks.Marker(INSTALLER, name, label)
 
 # The line an ESP-IDF project's CMakeLists.txt is built around. CMake commands
 # ignore case, and only a line that starts with it counts, so a commented out
@@ -123,25 +137,12 @@ def block_span(text, name):
     Where this library's block is: (start, end), None when it has none, or
     False when only its first marker is there.
     """
-    open_mark = MARK_OPEN.format(name=name)
-    close_mark = MARK_CLOSE.format(name=name)
-
-    if open_mark not in text:
-        return None
-
-    start = text.index(open_mark)
-
-    if close_mark not in text[start:]:
-        return False
-
-    return start, text.index(close_mark, start) + len(close_mark)
+    return blocks.span(text, marker(name))
 
 
 def _outside(text, name):
     """The text without this library's block."""
-    span = block_span(text, name)
-
-    return text[:span[0]] + text[span[1]:] if span else text
+    return blocks.outside(text, marker(name))
 
 
 def assigned(text):
@@ -196,6 +197,10 @@ def _write_block(path, label, text, updated, what):
     except OSError as error:
         return Outcome(label, MANUAL, f"Could not write {label}: {error}", backup=saved)
 
+    # An update, when the file had a block of the library's before.
+    if f">>> esp32-installer: {what} >>>" in text or f">>> esp32-installer: {what}/" in text:
+        return Outcome(label, CHANGED, f"Updated {what} in {label}.", backup=saved)
+
     return Outcome(label, CHANGED, f"Added {what} to {label}.", backup=saved)
 
 
@@ -207,45 +212,48 @@ def _half_written(label, name, block):
     )
 
 
-def _cut(text, span, newline):
-    """
-    The text with a block taken out, with the line it stood on and the one
-    blank line that came with it: below it in CMakeLists.txt, or above it at
-    the end of sdkconfig.defaults.
-    """
-    start, end = span
-
-    if text.startswith(newline, end):
-        end += len(newline)
-
-    if text.startswith(newline, end):
-        end += len(newline)
-    elif end == len(text) and text[:start].endswith(newline + newline):
-        start -= len(newline)
-
-    return text[:start] + text[end:]
-
-
 def _cut_block(path, label, name):
-    """Take this library's block out of one file. Returns an Outcome, ALREADY when it has none."""
+    """
+    Take this library's blocks out of one file, with the blank line each
+    brought: its own, and in CMakeLists.txt every group of its CMake lines.
+
+    Returns an Outcome, ALREADY when the file has no block of it.
+    """
     try:
         text = read(path)
     except (OSError, UnicodeDecodeError):
         return Outcome(label, ALREADY, f"{label} has nothing of {name}.")
 
-    span = block_span(text, name)
+    newline = line_ending(text)
+    updated = text
 
-    if span is None:
+    for found in [marker(name)] + [marker(name, group) for group in blocks.labels(text, INSTALLER, name)]:
+        span = blocks.span(updated, found)
+
+        if span is False:
+            return Outcome(label, MANUAL, f"{label} has a half written esp32-installer block for "
+                           f"{found.name}. Take it out by hand.")
+
+        if span is not None:
+            updated = blocks.cut(updated, span, newline)
+
+    if updated == text:
         return Outcome(label, ALREADY, f"{label} has nothing of {name}.")
 
-    if span is False:
-        return Outcome(label, MANUAL, f"{label} has a half written esp32-installer block for {name}. "
-                       "Take it out by hand.")
-
     saved = backup(path)
-    write(path, _cut(text, span, line_ending(text)))
+    write(path, updated)
 
     return Outcome(label, CHANGED, f"Removed {name} from {label}.", backup=saved)
+
+
+def _edited(project_root, name, label, markers, text):
+    """A line for each block the user changed inside since it was written."""
+    entry = installed_libraries(project_root).get(name)
+    recorded = entry.get("blocks") if isinstance(entry, dict) else None
+
+    return [f"Your change inside the {found.name} block is replaced: the block is written again on every "
+            "install. The file as it was is in the backup."
+            for found in markers if blocks.edited(recorded, label, found, text)]
 
 
 # CMakeLists.txt
@@ -276,15 +284,17 @@ def cmake_block(library, destination, project_root, newline="\n"):
 def integrate_cmake(project_root, library, destination):
     """
     Add a library outside the components folder to EXTRA_COMPONENT_DIRS, or
-    take out the block of one that has moved into it. Returns an Outcome, or
-    None when there is nothing to say.
+    take out the block of one that has moved into it, and write its groups of
+    CMake lines whose place is the project's. Returns an Outcome, or None when
+    there is nothing to say.
     """
     path = find_project(project_root)
     name = library.name
     wanted = not in_components(destination, project_root)
+    ours = [group for group in groups(library) if group.where in (BEFORE_PROJECT, AFTER_PROJECT)]
 
     if path is None:
-        if not wanted:
+        if not wanted and not ours:
             return None
 
         return Outcome(
@@ -298,16 +308,39 @@ def integrate_cmake(project_root, library, destination):
     newline = line_ending(text)
     span = block_span(text, name)
 
-    if not wanted:
+    if not wanted and not ours:
         # In the components folder now, where ESP-IDF finds it, so a block
-        # from when it was elsewhere would only add it a second time.
-        return _cut_block(path, CMAKELISTS, name) if span is not None else None
+        # from when it was elsewhere would only add it a second time. Groups
+        # an earlier version had go with it.
+        if span is None and not blocks.labels(text, INSTALLER, name):
+            return None
 
-    block = cmake_block(library, destination, project_root, newline)
+        return _cut_block(path, CMAKELISTS, name)
 
     if span is False:
-        return _half_written(CMAKELISTS, name, block)
+        return _half_written(CMAKELISTS, name, cmake_block(library, destination, project_root, newline))
 
+    if wanted:
+        updated = _with_main_block(text, span, cmake_block(library, destination, project_root, newline), newline)
+    else:
+        updated = blocks.cut(text, span, newline) if span is not None else text
+
+    updated = _with_groups(updated, library, ours, newline)
+
+    if updated is False:
+        return _half_written(CMAKELISTS, name, "\n".join(
+            line for group in ours for line in group_lines(library, group)))
+
+    outcome = _write_block(path, CMAKELISTS, text, updated, name)
+    markers = ([marker(name)] if wanted else []) + [marker(name, group.label) for group in ours]
+    outcome.blocks = {CMAKELISTS: blocks.fingerprints(updated, markers)}
+    outcome.steps += _edited(project_root, name, CMAKELISTS, markers, text)
+
+    return outcome
+
+
+def _with_main_block(text, span, block, newline):
+    """text with the library's EXTRA_COMPONENT_DIRS block above include(project.cmake)."""
     rest = text
 
     if span is not None:
@@ -315,7 +348,7 @@ def integrate_cmake(project_root, library, destination):
 
         # Where it is, when that is above include(project.cmake).
         if start < PROJECT_CMAKE.search(text).start():
-            return _write_block(path, CMAKELISTS, text, text[:start] + block + text[end:], name)
+            return text[:start] + block + text[end:]
 
         # Below it the list does nothing, since ESP-IDF has looked for
         # components by then. It comes out, and goes above.
@@ -327,9 +360,50 @@ def integrate_cmake(project_root, library, destination):
     # Right above include(project.cmake), with a blank line between, and
     # nothing added above it, so an uninstall gives the file back as it was.
     first = PROJECT_CMAKE.search(rest).start()
-    updated = rest[:first] + block + newline + newline + rest[first:]
 
-    return _write_block(path, CMAKELISTS, text, updated, name)
+    return rest[:first] + block + newline + newline + rest[first:]
+
+
+def group_lines(library, group):
+    """A group's block in the project's CMakeLists.txt, as lines."""
+    found = marker(library.name, group.label)
+
+    return ([found.open, f"# From {library.name}'s installer.yml, and written again on every install."]
+            + list(group.lines) + [found.close])
+
+
+def _with_groups(text, library, ours, newline):
+    """
+    text with the library's groups for the project each in its place, and any
+    group it no longer has taken out. False when one is half written.
+    """
+    wanted = {group.label for group in ours}
+
+    for label in blocks.labels(text, INSTALLER, library.name):
+        if label not in wanted:
+            found = blocks.span(text, marker(library.name, label))
+
+            if found is False:
+                return False
+
+            text = blocks.cut(text, found, newline)
+
+    for group in ours:
+        lines = group_lines(library, group)[1:-1]
+        anchor = _above_project if group.where == BEFORE_PROJECT else None
+        text = blocks.place(text, marker(library.name, group.label), lines, newline, anchor)
+
+        if text is False:
+            return False
+
+    return text
+
+
+def _above_project(text):
+    """Where include(project.cmake)'s line starts, for a group to go above it."""
+    found = PROJECT_CMAKE.search(text)
+
+    return blocks.line_start(text, found.start()) if found else None
 
 
 # sdkconfig.defaults
@@ -399,6 +473,8 @@ def integrate_defaults(project_root, library):
         updated = (head + newline + newline if head else "") + block + newline
 
     outcome = _write_block(path, DEFAULTS, text, updated, library.name)
+    outcome.blocks = {DEFAULTS: blocks.fingerprints(updated, [marker(library.name)])}
+    outcome.steps += _edited(project_root, library.name, DEFAULTS, [marker(library.name)], text)
     outcome.steps += stale(library, project_root)
 
     return outcome
@@ -647,8 +723,10 @@ def uninstall(project_root, name, component):
 
     for relative_path in (CMAKELISTS, DEFAULTS):
         path = root / relative_path
+        text = _text(path)
 
-        if path.is_file() and block_span(_text(path), name) is not None:
+        # Its own block, or any group of its CMake lines.
+        if path.is_file() and (block_span(text, name) is not None or blocks.labels(text, INSTALLER, name)):
             outcomes.append(_cut_block(path, relative_path, name))
 
     if component is not None:
