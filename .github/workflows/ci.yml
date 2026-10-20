@@ -98,20 +98,29 @@ jobs:
 
       # The wheel just built, into the test project, the way a user does it:
       # from the project's folder, with nobody to answer. extra brings what
-      # 2.0.0 adds: files made once and groups of CMake lines.
+      # 2.0.0 adds: files made once and groups of CMake lines. places brings
+      # what 2.1.0 adds: every file keeping its path, an extra with a root, a
+      # once file named by its path alone, and CMake lines under their place,
+      # with {library} in them.
       - name: Install the demo libraries
         run: |
           . "$IDF_PATH/export.sh" > /dev/null
           python -m pip install --no-index dist/*.whl
           cp -r test/e2e/app "$RUNNER_TEMP/app"
           cd "$RUNNER_TEMP/app"
-          esp32-installer "$GITHUB_WORKSPACE/test/e2e/demo" "$GITHUB_WORKSPACE/test/e2e/extra" < /dev/null
+          esp32-installer "$GITHUB_WORKSPACE/test/e2e/demo" "$GITHUB_WORKSPACE/test/e2e/extra" "$GITHUB_WORKSPACE/test/e2e/places" < /dev/null
           cat CMakeLists.txt main/CMakeLists.txt sdkconfig.defaults version.txt extra.defaults
           cat components/demo/CMakeLists.txt components/demo/Kconfig components/extra/CMakeLists.txt
+          cat components/places/CMakeLists.txt components/places/Kconfig
+          test -f components/places/src/places.h
+          test -f components/places/private/places_private.h
+          test -f config/places.cfg
+          test -f tools/places.txt
 
       # 52 is the library's answer with the value sdkconfig.defaults sets, 50,
       # not its default of 40, so this also shows the user's setting won. 7 is
       # extra's with the 5 from extra.defaults, and 3.1.4 is from version.txt.
+      # 11 is places' with the 9 from places.defaults, read through {library}.
       # The linux target builds for the runner itself, so the program runs here.
       - name: Build it for linux and run it
         working-directory: ${{ runner.temp }}/app
@@ -123,6 +132,7 @@ jobs:
           timeout 60 ./build/app.elf | tee run.txt
           grep -q "demo says 52" run.txt
           grep -q "extra says 7, version 3.1.4" run.txt
+          grep -q "places says 11" run.txt
 
       # The same project for a real chip, which is what users build.
       - name: Build it for esp32
@@ -145,3 +155,15 @@ jobs:
           test ! -e components/extra
           test -f version.txt
           test -f extra.defaults
+
+      # And places: its blocks go, its tools/ with them, and its once file stays.
+      - name: Take places out
+        working-directory: ${{ runner.temp }}/app
+        run: |
+          . "$IDF_PATH/export.sh" > /dev/null
+          esp32-installer --uninstall places < /dev/null
+          if grep -q "esp32-installer: places" CMakeLists.txt main/CMakeLists.txt; then exit 1; fi
+          if grep -qw "places" main/CMakeLists.txt; then exit 1; fi
+          test ! -e components/places
+          test ! -e tools
+          test -f config/places.cfg

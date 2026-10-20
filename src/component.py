@@ -21,6 +21,7 @@ from pathlib import Path
 
 from .core import blocks, usercode
 from .core.files import backup
+from .core.manifest import LIBRARY
 from .core.target import ALREADY, CHANGED, MANUAL, Outcome
 
 NAME = "ESP-IDF component"
@@ -136,10 +137,16 @@ def cmakelists(library, requires):
             lines.extend(group.lines)
             continue
 
+        # {library} in a 2.1.0 manifest's lines is the component's own folder.
+        written = group.lines
+
+        if getattr(library, "rooted", False):
+            written = [line.replace(LIBRARY, "${COMPONENT_DIR}") for line in written]
+
         found = blocks.Marker("esp32-installer", library.name, group.label)
         lines.append(found.open)
         lines.append(f"# From {library.name}'s installer.yml, and written again on every install.")
-        lines.extend(group.lines)
+        lines.extend(written)
         lines.append(found.close)
 
     # The user's own lines, which every install carries over. Empty to start

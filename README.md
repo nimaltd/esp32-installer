@@ -82,8 +82,8 @@ app/
     CMakeLists.txt         example added to PRIV_REQUIRES, when main lists its own
                            or the project builds only what main names
   components/example/
-    example.h              the library's files, as its installer.yml lists them
-    example.c
+    src/example.h          the library's files, at the paths they have in its repository
+    src/example.c
     CMakeLists.txt         written by the installer: idf_component_register()
     Kconfig                written by the installer: the library's settings
 ```
@@ -93,9 +93,9 @@ ESP-IDF builds every folder of `components/` that has a `CMakeLists.txt` calling
 ```cmake
 idf_component_register(
     SRCS
-        "example.c"
+        "src/example.c"
     INCLUDE_DIRS
-        "."
+        "src"
     REQUIRES
         esp_timer
 )
@@ -190,13 +190,13 @@ project(app)
 
 ### Lines a library adds to your CMakeLists.txt
 
-A library can need lines of CMake in your project's `CMakeLists.txt`, and then it says so in its `installer.yml`: above `include(project.cmake)`, for what ESP-IDF reads as the project starts, or at the end of the file, for what needs the project's own targets. Each group goes between two lines that name it:
+A library can need lines of CMake in your project's `CMakeLists.txt`, and then it says so in its `installer.yml`: above `include(project.cmake)`, for what ESP-IDF reads as the project starts, or at the end of the file, for what needs the project's own targets. The lines of each place go between two lines that name it:
 
 ```cmake
-# >>> esp32-installer: example/defaults >>>
+# >>> esp32-installer: example/before-project >>>
 # From example's installer.yml, and written again on every install.
 list(APPEND SDKCONFIG_DEFAULTS "${CMAKE_CURRENT_SOURCE_DIR}/example.defaults")
-# <<< esp32-installer: example/defaults <<<
+# <<< esp32-installer: example/before-project <<<
 ```
 
 Every block is written again on every install, so put your own lines outside them. An edit made inside one is noticed on the next install, and the file as it was is in the `.bak`.
@@ -207,7 +207,7 @@ A library can bring files that belong to your project rather than to the library
 
 ```
 Files
-  written components/example/example.h
+  written components/example/src/example.h
   created version.txt  yours from now on
 ```
 
@@ -220,7 +220,7 @@ A library can need something made that no file can carry, such as a key, made fr
 ```
 Run
   make-key     Make the product's key, product.key
-               python scripts/make_key.py product.key
+               python tools/make_key.py product.key
                Run it? [Y/n]:
 ```
 
@@ -249,8 +249,8 @@ Requirements
 Folder to install example into [components/example]:
 
 Files
-  written components/example/example.h
-  written components/example/example.c
+  written components/example/src/example.h
+  written components/example/src/example.c
 
 Project
   updated ESP-IDF component  The component example: wrote CMakeLists.txt, Kconfig.
@@ -401,7 +401,7 @@ A repository of an organisation can need one more step: an organisation that ask
 
 Put an `installer.yml` at the root of the repository. Any library can have one, whoever wrote it, and the one file serves esp32-installer and the other installers alike: each reads its own keys and leaves the others' alone.
 
-Every key esp32-installer reads is below, each with what it does. Only `name` and `files` are required; leave out what your library does not need. For a working one to copy, see [esp32-installer-example](https://github.com/nimaltd/esp32-installer-example).
+Every key esp32-installer reads is below, each with what it does, as a manifest asking for 2.1.0 writes it. Only `name` and its `headers` or `sources` are required; leave out what your library does not need. What changed in 2.1.0, and how a manifest from before reads, is under [Paths, from 2.1.0](#paths-from-210). For a working one to copy, see [esp32-installer-example](https://github.com/nimaltd/esp32-installer-example).
 
 ```yaml
 name: example                      # the library's name, its component and its folder
@@ -417,7 +417,7 @@ category: storage                  # sensor, storage, display, communication, wi
 provides: []                       # what it gives other libraries: [rtos] for an RTOS
 
 requires:
-  esp32_installer: 2.0.0           # the oldest esp32-installer that reads this file
+  esp32_installer: 2.1.0           # the oldest esp32-installer that reads this file
   libraries:                       # other libraries, installed first when missing
     - osal >= 1.0.0                # no owner means nimaltd; >= the oldest that will do
     - owner/lib                    # anyone else's, as owner/name
@@ -434,45 +434,45 @@ requires:
       note: 400 kHz                # how to set it up
 
 install:
-  layout: mirror                   # mirror keeps the repository's folders,
-                                   # flat (the default) puts every file at the top
   include_dirs: [src]              # include folders, only when the guess is wrong
   defines:                         # given to the library and every component using it,
     - EXAMPLE_FAST                 # NAME or NAME=value
 
-files:
-  headers:                         # .h files; the first is the one to #include
-    - src/example.h
-    - src/port/*.h                 # a wildcard, matched the way a shell would
-  sources:                         # .c files, the component's SRCS
-    - src/example.c
-    - from: src/port/spi.c         # a file that goes somewhere of its own,
-      to: port/spi.c               # whatever the layout says
+headers:                           # .h files; the first is the one to #include
+  - src/example.h                  # every file keeps its path: components/example/src/example.h
+  - src/port/*.h                   # a wildcard, matched the way a shell would:
+                                   # * inside one folder, ** across any number of them
+sources:                           # .c files, the component's SRCS
+  - src/example.c
+  - from: src/port/spi.c           # a file that goes somewhere of its own,
+    to: port/spi.c                 # in the library's folder
 
 options:                           # parts the user chooses at install
   littlefs:                        # the name typed after --with
     description: LittleFS file system on the flash  # the question asked
     libraries:                     # libraries this part needs, installed first
       - littlefs >= 2.11.0
-    files:                         # its files, written like files above
-      sources:
-        - src/example_lfs.c
+    sources:                       # its files, written like headers and sources above
+      - src/example_lfs.c
 
 extras:                            # copied as they are, never compiled
   - LICENSE.md                     # LICENSE.md and NOTICE are the default,
   - NOTICE                         # so leave this out if that is all
-  - README.md
+  - README.md                      # in the library's folder: components/example/README.md
+  - root: tools                    # 2.1.0: tools/ into the project's folder instead, as
+                                   # the library's own, written again on every install
 
 once:                              # the project's own files: made when missing,
                                    # then the user's, never replaced or removed
-  - from: project/version.txt      # the file in the repository, to the project's folder
-  - from: config/example.defaults  # to: its place in the project, when not its name
+  - version.txt                    # 2.1.0: a path alone lands at that path: version.txt
+  - from: config/example.defaults  # to: another place in the project
     to: example.defaults
 
 run:                               # steps run once the files are in, each asked about first
   - label: make-key                # the name typed after --run
     description: Make the product's key, product.key  # shown with the question
-    script: scripts/make_key.py    # Python, run with the installer's own Python,
+    script: tools/make_key.py      # Python, run with the installer's own Python, from the
+                                   # project's folder, or {library}/... in the library's
     args: [product.key]            # or command: [program, arguments], with no shell
     unless: product.key            # skipped when this file is in the project already
 
@@ -480,11 +480,12 @@ esp32:                             # read by esp32-installer only
   requires:                        # ESP-IDF components the code uses: its REQUIRES
     - esp_timer
     - esp_driver_i2c
-  cmake:                           # groups of CMake lines, each in a place of its own
-    - label: libs                  # names the group, in the lines around it
-      where: component             # component (the default), before-project or after-project
-      lines:
-        - target_link_libraries(${COMPONENT_LIB} PRIVATE m)
+  cmake:                           # lines of CMake, under the place they go:
+    component:                     # the component's CMakeLists.txt
+      - target_link_libraries(${COMPONENT_LIB} PRIVATE m)
+    before-project:                # the project's, above include(project.cmake)
+      - list(APPEND EXTRA_COMPONENT_DIRS "{library}/extra")
+    after-project: []              # the project's, at its end
   settings:                        # Kconfig symbols for menuconfig, CONFIG_<name> in the code
     - name: EXAMPLE_POLL_CHUNK     # the symbol, best started with the library's name
       type: int                    # bool, int, hex or string
@@ -503,37 +504,66 @@ Leave `version` out. The installer reads the version from the `@version` tag in 
 
 A library that uses anything 2.0.0 brings says `requires.esp32_installer: 2.0.0`: `once` files in the project's folder, `run`, groups under `esp32.cmake`, or a library it needs given with an `@` or a `manifest`. The version also decides where `once` files go. A manifest asking for 2.0.0 or newer puts them in the project's folder, and one asking for less keeps the meaning it was written for, the library's own folder, so a release tagged before 2.0.0 still installs and builds as it did.
 
+### Paths, from 2.1.0
+
+A manifest asking for `requires.esp32_installer: 2.1.0` has one rule for every path that names a place in the project's folder: it starts at the project's folder. `{library}` at its start names the library's own folder instead, wherever `--dir` put it. A path that names a file of the library, under `headers`, `sources`, `extras` or `once`, or as a `from`, is a path in the repository, as always.
+
+And every file is copied to the path it has, unchanged, unless a `to` says otherwise, so a path alone is all an entry needs: `src/example.c` lands at `src/example.c` in the library's folder, so `install.layout` is gone, `flat` is refused and `mirror` says nothing new. A `once` file lands at its own path in the project's folder: `- config/partitions.csv` at `config/partitions.csv`, where before 2.1.0 it was written `- from: config/partitions.csv` and took only its name. And `headers` and `sources` need no `files` around them; `files` still reads, but not both at once.
+
+A `to` gives a file another place, where its list puts files. Under `headers`, `sources` and `extras` that is the library's folder, so `- from: src/example.h, to: example.h` lands at the top of it, and the include path follows. Under `once` it is the project's folder, where every `once` file lands. A `root` puts an extra in the project's folder instead of the library's: `- root: tools` takes the library's `tools/` to the project's `tools/`. Code has no `root`, since it is built in the library's folder, and a `once` file needs none. Wherever a `from` would be the same path as its `to` or `root`, leave it out: `- root: tools` is `- from: tools, root: tools`.
+
+And `esp32.cmake` gives its lines under the places they go, with no `label`, `where` or `lines`: see [More CMake for a library](#more-cmake-for-a-library).
+
+| Key | Starts at |
+|---|---|
+| `headers`, `sources`, `extras`, `once`, `from` | the library's repository |
+| `to` under `headers`, `sources` and `extras` | the library's folder |
+| `once.to`, `extras.root` | the project's folder |
+| `run.script`, `run.unless` | the project's folder, or the library's with `{library}/` |
+| `{library}` in `run.args` and `run.command` | the library's folder, as the step names it from the project's folder |
+| `{library}` in `esp32.cmake` lines | `${CMAKE_CURRENT_SOURCE_DIR}/<the library's folder>` in the project's `CMakeLists.txt`, `${COMPONENT_DIR}` in the component's |
+
+An extra with a `root` lands in the project's folder, as the library's own: a file at `root` itself, the files of a folder under it with their path below it, those a wildcard matches under it with their names; an extra's `to` places them the same way in the library's folder. It is written again on every install, a file of it the new version no longer ships is removed, and an uninstall takes it out. A file already there that the installer did not put there is the user's, and is never written over: the install stops and says so.
+
+In every manifest, a wildcard matches the whole path, the way a shell does, and the same whether the library comes from GitHub or a folder: `*` and `?` stay inside one folder, `**` crosses any number of them, none included, and `[ab]` is one of a set. So `*.c` is the `.c` files at the top, `src/*.c` those in `src`, and `src/**/*.c` every one below `src`, however deep. And two files of the code that would land in one place, such as two `util.c` that `flat` put side by side, are refused when the manifest is read, where the second used to replace the first without a word.
+
+```yaml
+extras:
+  - root: tools                    # tools/keygen.py and tools/keygen.md, into the project's folder
+run:
+  - label: signing-key
+    script: tools/keygen.py        # from the project's folder
+    unless: sign_key.pem
+```
+
+A step's script has to be one the install puts in place, an extra with a `root` or a `once` file, or with `{library}`, a file of the library's folder; anything else is refused when the manifest is read. A manifest asking for less than 2.1.0 keeps the meaning it was written for: its script is found in the library as it was fetched, and `{library}` is left as it is written.
+
 ### More CMake for a library
 
-A library that needs more than its files and its defines, a library linked in, an option for its compiler, or a line in the project's own `CMakeLists.txt`, lists the lines under `esp32.cmake`, in groups. Each group has a label, a place and its lines:
+A library that needs more than its files and its defines, a library linked in, an option for its compiler, or a line in the project's own `CMakeLists.txt`, lists the lines under `esp32.cmake`, under the place each goes:
 
 ```yaml
 esp32:
   cmake:
-    - label: libs                  # where: component, the default
-      lines:
-        - target_link_libraries(${COMPONENT_LIB} PRIVATE m)
-        - target_compile_options(${COMPONENT_LIB} PRIVATE -O2)
-    - label: defaults
-      where: before-project
-      lines:
-        - list(APPEND SDKCONFIG_DEFAULTS "${CMAKE_CURRENT_SOURCE_DIR}/example.defaults")
-    - label: main
-      where: after-project
-      lines:
-        - idf_component_get_property(main_lib main COMPONENT_LIB)
-        - target_compile_definitions(${main_lib} PRIVATE EXAMPLE_IN_MAIN)
+    component:
+      - target_link_libraries(${COMPONENT_LIB} PRIVATE m)
+      - target_compile_options(${COMPONENT_LIB} PRIVATE -O2)
+    before-project:
+      - list(APPEND SDKCONFIG_DEFAULTS "${CMAKE_CURRENT_SOURCE_DIR}/example.defaults")
+    after-project:
+      - idf_component_get_property(main_lib main COMPONENT_LIB)
+      - target_compile_definitions(${main_lib} PRIVATE EXAMPLE_IN_MAIN)
 ```
 
-| `where` | Written into | For |
+| Place | Written into | For |
 |---|---|---|
-| `component`, the default | the component's `CMakeLists.txt`, after `idf_component_register()`, where `${COMPONENT_LIB}` is its own library | the component itself |
+| `component` | the component's `CMakeLists.txt`, after `idf_component_register()`, where `${COMPONENT_LIB}` is its own library | the component itself |
 | `before-project` | the project's `CMakeLists.txt`, above `include($ENV{IDF_PATH}/tools/cmake/project.cmake)` | what ESP-IDF reads as the project starts, such as `EXTRA_COMPONENT_DIRS` or `SDKCONFIG_DEFAULTS` |
 | `after-project` | the project's `CMakeLists.txt`, at its end | what needs the project's own targets, every component's library among them |
 
-Each group is written between two lines that name it, `# >>> esp32-installer: example/defaults >>>` and its pair, and groups in one place keep the manifest's order. Every install writes them again: a group whose lines changed is updated, one whose `where` changed is moved, and one the manifest no longer has is taken out. A line keeps the spaces it starts with, so the body of an `if()` can be indented.
+The lines of each place are written as one block, between two lines that name the library and the place, `# >>> esp32-installer: example/before-project >>>` and its pair, in the manifest's order. Every install writes them again: a place whose lines changed is updated, and one the manifest no longer has is taken out. A line keeps the spaces it starts with, so the body of an `if()` can be indented. `{library}` in a line names the library's folder, as `${CMAKE_CURRENT_SOURCE_DIR}/components/example` in the project's file and `${COMPONENT_DIR}` in the component's, wherever `--dir` put it; anything else in a line is CMake's own, written as it stands. A line holding a colon, as `message()` often does, goes in quotes, or YAML reads it as a mapping.
 
-The label is lower case letters, digits, `_` and `-`, starting with a letter, and two groups of one library, its options' groups counted, never share one. An option brings groups of its own under `options.<name>.esp32.cmake`, written while it is chosen and taken out by the update that turns it off. A line holding a colon, as `message()` often does, goes in quotes, or YAML reads it as a mapping.
+An option brings lines of its own under `options.<name>.esp32.cmake`, the same way, written while it is chosen and taken out by the update that turns it off. Its blocks are named after it and the place, `example/littlefs-component`, so they never meet the library's.
 
 One thing about `SDKCONFIG_DEFAULTS`: once it is set, ESP-IDF reads only the files it lists, and no longer `sdkconfig.defaults` by itself. A group that adds a file to it names `sdkconfig.defaults` first, when the project has one and nothing set the list yet:
 
@@ -546,7 +576,7 @@ list(APPEND SDKCONFIG_DEFAULTS "${CMAKE_CURRENT_SOURCE_DIR}/example.defaults")
 
 A component of headers alone is an interface library, so its lines use `INTERFACE` where one with sources uses `PRIVATE` or `PUBLIC`. The lines run when the user configures the build, the same as a `CMakeLists.txt` the library ships itself would, so they are the library's to answer for.
 
-The form from before 2.0.0, a plain list of lines, still installs: it is one group in `component`, written as it always was.
+The forms from before 2.1.0 still install. A list of groups, each with a `label`, a `where`, `component` when left out, and its `lines`, writes each group as a block named after its label, `example/<label>`; a manifest moving to places has its old blocks taken out on the next install, and the new ones written. The form from before 2.0.0, a plain list of lines, is one group in `component`, written as it always was.
 
 The user has a place in the component's file too. Its last lines are a `USER CODE` section, empty to start with, and every install keeps what is written in it, the way a configuration header keeps settings:
 
@@ -564,12 +594,12 @@ A file that belongs to the project rather than to the library goes under `once`:
 
 ```yaml
 once:
-  - from: project/version.txt          # to: the file's own name, version.txt
+  - version.txt                        # lands at version.txt, its own path
   - from: config/partitions.csv
-    to: partitions.csv
+    to: partitions.csv                 # a place of its own
 ```
 
-`from` is a file of the library's repository, and `to` its place from the project's folder, its own name when left out. A folder inside the project is fine.
+From 2.1.0 a path alone is a file of the library's repository, landing at the same path in the project, so a repository that keeps these files where the project keeps them needs nothing more. A file that goes somewhere else names it with `from`, the file in the repository, and `to`, its place from the project's folder. Before 2.1.0 each entry is a mapping with a `from`, and a `to` left out meant the file's name alone, at the top. A `once` file has no `root`: it always lands in the project's folder. A folder inside the project is fine.
 
 Each is checked before anything is written. `to` stays inside the project, names none of the files the installer manages or reads, `CMakeLists.txt`, `main/CMakeLists.txt`, `sdkconfig`, `sdkconfig.defaults` and the record, and does not point into the library's own folder, which every install replaces. Two entries with one `to` are refused. And `from`, like every file a manifest names, stays inside the library: no `..`, no absolute path, no link leading out of it.
 
@@ -580,17 +610,19 @@ What the user changes in their settings belongs in USER CODE sections of the lib
 Something no file can carry, such as a key made fresh for each product, is made by a step under `run`. It runs once the library's files are in, in the project's folder:
 
 ```yaml
+extras:
+  - root: tools                        # tools/make_key.py, into the project's folder
 run:
   - label: make-key
     description: Make the product's key, product.key
-    script: scripts/make_key.py
+    script: tools/make_key.py          # the project's tools/make_key.py
     args: [product.key]
     unless: product.key
 ```
 
 - `label` names the step, typed after `--run`, in lower case letters, digits, `_` and `-`.
 - `description` is shown with the question.
-- `script` is a Python file of the library, run with the installer's own Python, so it works on every computer the installer does. Or `command`, a program and its arguments as a list, `[openssl, rand, -out, product.key, "32"]`, run as it is, with no shell. One of the two, never both.
+- `script` is a Python file, run with the installer's own Python, so it works on every computer the installer does. From 2.1.0 it is a path from the project's folder, where an extra with a `root` or a `once` file put it, or `{library}/...` in the library's folder, see [Paths, from 2.1.0](#paths-from-210); before, it is a file of the library's repository. Or `command`, a program and its arguments as a list, `[openssl, rand, -out, product.key, "32"]`, run as it is, with no shell. One of the two, never both.
 - `args` are added after either.
 - `unless` names a file the step makes, from the project's folder. When it is there, the step is skipped without a question.
 

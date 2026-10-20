@@ -1,0 +1,52 @@
+# A third library made only for the tests, with what 2.1.0 brings: headers and
+# sources on their own, every file keeping its path, an extra with a root, a
+# once file named by its path alone, and CMake lines under the place they go,
+# {library} in them. places.c and the application's main.c check each reached
+# the build: a piece that did not arrive stops it.
+
+name: places
+description: What esp32-installer 2.1.0 brings, in a real ESP-IDF build
+repository: https://github.com/nimaltd/esp32-installer
+license: Apache-2.0
+
+requires:
+  esp32_installer: 2.1.0
+
+# Each keeps its path: components/places/src/places.h, on the include path.
+headers:
+  - src/places.h
+sources:
+  - src/places.c
+
+extras:
+  - private              # private/places_private.h, in the component's folder
+  - places.defaults      # in the component's folder, read through {library} below
+  - root: tools          # tools/places.txt, into the project's folder
+
+once:
+  - config/places.cfg    # lands at its own path in the project
+
+esp32:
+  settings:
+    - name: PLACES_BASE
+      type: int
+      default: 1
+      range: [0, 100]
+      prompt: What places_answer() adds two to, 9 from places.defaults
+  cmake:
+    # {library} is ${COMPONENT_DIR} here: places.c includes places_private.h,
+    # which nothing else puts on its include path.
+    component:
+      - target_include_directories(${COMPONENT_LIB} PRIVATE "{library}/private")
+    # And the component's folder from the project's here, wherever --dir put
+    # it. ESP-IDF reads sdkconfig.defaults only when SDKCONFIG_DEFAULTS is not
+    # set, so it is named first when nothing named it yet.
+    before-project:
+      - if(NOT SDKCONFIG_DEFAULTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/sdkconfig.defaults")
+      - '    set(SDKCONFIG_DEFAULTS "${CMAKE_CURRENT_SOURCE_DIR}/sdkconfig.defaults")'
+      - endif()
+      - list(APPEND SDKCONFIG_DEFAULTS "{library}/places.defaults")
+    # After project(), where every component's library exists.
+    after-project:
+      - idf_component_get_property(places_main main COMPONENT_LIB)
+      - target_compile_definitions(${places_main} PRIVATE PLACES_AFTER)

@@ -203,7 +203,7 @@ class Setting:
 class Esp32Part:
     """The esp32 section of installer.yml, with what it leaves out filled in."""
 
-    def __init__(self, data):
+    def __init__(self, data, rooted=False):
         if data is None:
             data = {}
 
@@ -244,13 +244,13 @@ class Esp32Part:
         if twice:
             raise ManifestError(f"esp32.settings has {', '.join(twice)} more than once.")
 
-        # Lines of CMake the library needs beyond its files, in labelled groups,
-        # each written where its where says: into the component's
-        # CMakeLists.txt, after idf_component_register(), or the project's,
-        # above include(project.cmake) or at its end. A plain list of lines is
-        # the form from before 2.0.0: one group, in the component, written as
-        # it always was.
-        self.cmake = blocks.groups(data.get("cmake"), "esp32.cmake", PLACES, COMPONENT_PLACE)
+        # Lines of CMake the library needs beyond its files, by the place they
+        # go, from 2.1.0: component, the component's CMakeLists.txt, after
+        # idf_component_register(), or before-project and after-project, the
+        # project's, above include(project.cmake) or at its end. Before,
+        # labelled groups each with a where; and a plain list of lines, the
+        # form from before 2.0.0: one group, in the component.
+        self.cmake = blocks.groups(data.get("cmake"), "esp32.cmake", PLACES, COMPONENT_PLACE, rooted=rooted)
 
 
 def idf_components(name):
@@ -295,7 +295,7 @@ class Esp32(Target):
         return [self.record_name, project.CMAKELISTS, project.MAIN, project.SDKCONFIG, project.DEFAULTS]
 
     def read_manifest(self, manifest, data):
-        manifest.esp32 = Esp32Part(data.get("esp32"))
+        manifest.esp32 = Esp32Part(data.get("esp32"), rooted=getattr(manifest, "rooted", False))
 
         # A label names one group, among the library's and all its options'.
         labels = [group.label for group in manifest.esp32.cmake]
@@ -317,7 +317,8 @@ class Esp32(Target):
             raise ManifestError(f"options.{option.name}.esp32 should hold cmake.")
 
         option.esp32_cmake = blocks.groups((part or {}).get("cmake"), f"options.{option.name}.esp32.cmake",
-                                           PLACES, COMPONENT_PLACE, legacy=False)
+                                           PLACES, COMPONENT_PLACE, legacy=False, prefix=option.name,
+                                           rooted=getattr(option, "rooted", False))
 
     def read_requirements(self, requirements, data):
         """The ESP-IDF part of requires: Kconfig symbols, and hardware."""
