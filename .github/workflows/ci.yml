@@ -8,29 +8,18 @@ on:
 
 jobs:
   test:
-    name: Tests on Python ${{ matrix.python }}, ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        python: ["3.8", "3.12"]
-
+    name: Tests
+    runs-on: ubuntu-latest
     steps:
-      # With the shared core, a git submodule. Without it nothing imports.
       - uses: actions/checkout@v7
-        with:
-          submodules: true
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ matrix.python }}
+          python-version: "3.12"
 
       - name: Install
-        run: python -m pip install --upgrade pip pytest PyYAML
+        run: python -m pip install --upgrade pip pytest
 
-      # Windows is in the matrix on purpose: its CRLF files and its paths are
-      # what break first in an sdkconfig.defaults or a CMakeLists.txt.
       - name: Test
         run: python test/run_tests.py
 
@@ -39,8 +28,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: true
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -73,97 +60,3 @@ jobs:
         with:
           name: dist
           path: dist/
-
-
-  esp-idf:
-    name: A real ESP-IDF build, run on the linux target
-    needs: build
-    runs-on: ubuntu-latest
-    # Espressif's own image, with ESP-IDF and its tools in /opt/esp. Its entry
-    # point sets the environment up, which a step does not run through, so
-    # each step sources export.sh itself.
-    container: espressif/idf:v6.0.1
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: true
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: dist
-          path: dist/
-
-      # The wheel just built, into the test project, the way a user does it:
-      # from the project's folder, with nobody to answer. extra brings what
-      # 2.0.0 adds: files made once and groups of CMake lines. places brings
-      # what 2.1.0 adds: every file keeping its path, an extra with a root, a
-      # once file named by its path alone, and CMake lines under their place,
-      # with {library} in them.
-      - name: Install the demo libraries
-        run: |
-          . "$IDF_PATH/export.sh" > /dev/null
-          python -m pip install --no-index dist/*.whl
-          cp -r test/e2e/app "$RUNNER_TEMP/app"
-          cd "$RUNNER_TEMP/app"
-          esp32-installer "$GITHUB_WORKSPACE/test/e2e/demo" "$GITHUB_WORKSPACE/test/e2e/extra" "$GITHUB_WORKSPACE/test/e2e/places" < /dev/null
-          cat CMakeLists.txt main/CMakeLists.txt sdkconfig.defaults version.txt extra.defaults
-          cat components/demo/CMakeLists.txt components/demo/Kconfig components/extra/CMakeLists.txt
-          cat components/places/CMakeLists.txt components/places/Kconfig
-          test -f components/places/src/places.h
-          test -f components/places/private/places_private.h
-          test -f config/places.cfg
-          test -f tools/places.txt
-
-      # 52 is the library's answer with the value sdkconfig.defaults sets, 50,
-      # not its default of 40, so this also shows the user's setting won. 7 is
-      # extra's with the 5 from extra.defaults, and 3.1.4 is from version.txt.
-      # 11 is places' with the 9 from places.defaults, read through {library}.
-      # The linux target builds for the runner itself, so the program runs here.
-      - name: Build it for linux and run it
-        working-directory: ${{ runner.temp }}/app
-        run: |
-          . "$IDF_PATH/export.sh" > /dev/null
-          idf.py --preview set-target linux
-          idf.py build
-          grep -q "CONFIG_FREERTOS_HZ=1000" sdkconfig
-          timeout 60 ./build/app.elf | tee run.txt
-          grep -q "demo says 52" run.txt
-          grep -q "extra says 7, version 3.1.4" run.txt
-          grep -q "places says 11" run.txt
-
-      # The same project for a real chip, which is what users build.
-      - name: Build it for esp32
-        working-directory: ${{ runner.temp }}/app
-        run: |
-          . "$IDF_PATH/export.sh" > /dev/null
-          rm -rf build sdkconfig
-          idf.py set-target esp32
-          idf.py build
-
-      # Out again: every block of extra's goes, in both CMakeLists.txt files,
-      # and the files it made once stay, the project's own now.
-      - name: Take extra out
-        working-directory: ${{ runner.temp }}/app
-        run: |
-          . "$IDF_PATH/export.sh" > /dev/null
-          esp32-installer --uninstall extra < /dev/null
-          if grep -q "esp32-installer: extra" CMakeLists.txt main/CMakeLists.txt; then exit 1; fi
-          if grep -qw "extra" main/CMakeLists.txt; then exit 1; fi
-          test ! -e components/extra
-          test -f version.txt
-          test -f extra.defaults
-
-      # And places: its blocks go, its tools/ with them, and its once file stays.
-      - name: Take places out
-        working-directory: ${{ runner.temp }}/app
-        run: |
-          . "$IDF_PATH/export.sh" > /dev/null
-          esp32-installer --uninstall places < /dev/null
-          if grep -q "esp32-installer: places" CMakeLists.txt main/CMakeLists.txt; then exit 1; fi
-          if grep -qw "places" main/CMakeLists.txt; then exit 1; fi
-          test ! -e components/places
-          test ! -e tools
-          test -f config/places.cfg

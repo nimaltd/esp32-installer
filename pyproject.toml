@@ -8,7 +8,7 @@ name = "esp32-installer"
 # Read from esp32_installer.__version__, so the version lives in exactly one
 # place and cannot drift between the package and its metadata.
 dynamic = ["version"]
-description = "Install embedded C libraries into an ESP-IDF project, as components"
+description = "Now lib-installer: install embedded C libraries into STM32, Zephyr, ESP-IDF, Arduino and PlatformIO projects"
 readme = "README.md"
 requires-python = ">=3.8"
 license = "Apache-2.0"
@@ -35,12 +35,10 @@ Issues = "https://github.com/nimaltd/esp32-installer/issues"
 [project.scripts]
 esp32-installer = "esp32_installer.cli:main"
 
-# The package is the src folder itself, with no folder of its name inside. The
-# core is a git submodule, the whole core-installer repository, and its own
-# tests are no part of the installer, so they are not listed.
+# The package is the src folder itself, with no folder of its name inside.
 [tool.setuptools]
 package-dir = { "esp32_installer" = "src" }
-packages = ["esp32_installer", "esp32_installer.core"]
+packages = ["esp32_installer"]
 
 [tool.setuptools.dynamic]
 version = { attr = "esp32_installer.__version__" }

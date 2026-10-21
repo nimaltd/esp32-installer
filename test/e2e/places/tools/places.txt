@@ -1,2 +1,0 @@
-Written into the project's tools/ by places' extra with a root, on every
-install, and taken out by an uninstall.
