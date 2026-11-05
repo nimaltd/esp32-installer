@@ -1,12 +1,12 @@
 """
-esp32-installer is now lib-installer.
+esp32-installer is now libNIMA.
 
-This last release only says so. lib-installer does what esp32-installer did, for
-STM32, Zephyr, ESP-IDF, Arduino and PlatformIO alike, with the same commands:
-https://github.com/nimaltd/lib-installer
+This last release only says so. libNIMA does what esp32-installer did, for STM32,
+Zephyr, ESP-IDF, Arduino and PlatformIO alike, with a window and the libnima
+command: https://github.com/nimaltd/libNIMA
 """
 
-__version__ = "3.0.0"
+__version__ = "3.0.1"
 
 __all__ = ["main"]
 
